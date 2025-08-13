@@ -2,10 +2,8 @@ import os
 from dotenv import load_dotenv
 import chromadb
 from google import genai
-from chromadb.utils import embedding_functions
-from embedding import GeminiEmbeddingFunction, create_and_store_embeddings
+from ingestion_pipeline import vector_db
 from google.genai import types
-from loaders import load_documents_from_directory
 from typing import List
 import asyncio
 import time
@@ -18,71 +16,11 @@ load_dotenv()
 
 gemini_key = os.getenv("GEMINI_API_KEY")
 
-gemini_ef = GeminiEmbeddingFunction()
-
-# Intitalize chromadb with persistent storage
-chroma_client = chromadb.PersistentClient(path="chroma_persistent_storage")
-collection_name = "finance_collection"
-vector_db = chroma_client.get_or_create_collection(
-    name=collection_name, embedding_function=gemini_ef
-)
-
 # Initialize the GenAI client
 client = genai.Client(api_key=gemini_key)
 
-# Function to split text into chunks
-# def split_text(text, chunk_size=1000, chunk_overlap=20):
-#     chunks = []
-#     start = 0
-#     while start < len(text):
-#         end = start + chunk_size
-#         chunks.append(text[start:end])
-#         start = end - chunk_overlap
-#     return chunks
-
-
-def split_text(text, chunk_size=1000, chunk_overlap=20):
-    if chunk_overlap >= chunk_size:
-        raise ValueError("chunk_overlap must be smaller than chunk_size")
-    chunks = []
-    start = 0
-    text_length = len(text)
-    while start < text_length:
-        end = min(start + chunk_size, text_length)
-        chunk = text[start:end].strip()
-        if chunk:  # Avoid empty chunks
-            chunks.append(chunk)
-        if end == text_length:
-            break
-        start += chunk_size - chunk_overlap
-    return chunks
-
-# Load documents from the specified directory
-directory_path = "knowledge_base/"
-documents = load_documents_from_directory(directory_path)
-
-print(f"\nLoaded {len(documents)} documents from '{directory_path}'.") 
-
-# Split documents into chunks
-chunked_documents = []
-print("==== Splitting docs into chunks ====")
-for doc in documents:
-    print(f"Processing document: {doc['id']}")
-    chunks = split_text(doc["text"])
-    for i, chunk in enumerate(chunks):
-        chunked_documents.append({"id": f"{doc['id']}_chunk{i+1}", "text": chunk})
-
-print(f"Created {len(chunked_documents)} chunks from documents.")
-
-# print the first item and id
-# print("First chunk:")
-# print(f"ID: {chunked_documents[0]['id']}")
-# print(f"Text: {chunked_documents[0]['text']}")
-
-# Create and store embeddings in the vector database
-# Uncomment this if you need to use update the knowledge base.
-# create_and_store_embeddings(chunked_documents, vector_db)
-
+# save vector_db for use
+# vector_db = vector_db
 
 # Retrieval
 def get_query_embedding(query_text: str) -> List[float]:
@@ -211,8 +149,14 @@ async def answer_with_rag(
         
         # This is the RAG prompt template
         prompt = f"""
-        Based on the following context from financial documents, please provide a clear and concise answer to the user's question as a Nigerian financial advisor.
-        Use Nigerian context and tone.
+        You are an expert Nigerian financial advisor. Your knowledge base has been updated with the following highly relevant context. 
+        Your task is to synthesize this information to answer the user's question in a clear, natural, and concise way.
+
+        **Instructions:**
+        - Integrate the information from the context seamlessly into your response.
+        - Do NOT explicitly mention "the context provided" or "the documents." Speak as if this information is your own expertise.
+        - Maintain a polite, encouraging, and authoritative Nigerian tone.
+        - If the context does not contain the answer, answer based on what your general knowledge and the data you were trained with.
 
         CONTEXT:
         ---
@@ -234,9 +178,9 @@ async def answer_with_rag(
     return response.text
 
 async def main():
-    query1 = "What is investment? How do I start investing?"
-    query2 = "So as a Nigerian students earning arounf 50k a week, how do I start and still have enough to live on?"
-    query3 = "What of as a civil worker earning the nigerian minimum wage?"
+    query1 = "What is the conscious spending plan?"
+    query2 = "So as a Nigerian students earning arounf 50k a week, how do I start and still live a rich life?"
+    query3 = "Can you help me create a sample plan that would work?"
     
     response1 = await answer_with_rag(chat_session=chat, db_collection=vector_db, user_query=query1)
     print(response1)
