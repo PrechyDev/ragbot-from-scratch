@@ -7,6 +7,11 @@ from embedding import GeminiEmbeddingFunction, create_and_store_embeddings
 from google.genai import types
 from loaders import load_documents_from_directory
 from typing import List
+import asyncio
+import time
+
+# --- NEW: Import the reranker library ---
+from ragatouille import RAGPretrainedModel
 
 # load env variables and setup embedding function
 load_dotenv()
@@ -26,13 +31,30 @@ vector_db = chroma_client.get_or_create_collection(
 client = genai.Client(api_key=gemini_key)
 
 # Function to split text into chunks
-def split_text(text, chunk_size=1500, chunk_overlap=20):
+# def split_text(text, chunk_size=1000, chunk_overlap=20):
+#     chunks = []
+#     start = 0
+#     while start < len(text):
+#         end = start + chunk_size
+#         chunks.append(text[start:end])
+#         start = end - chunk_overlap
+#     return chunks
+
+
+def split_text(text, chunk_size=1000, chunk_overlap=20):
+    if chunk_overlap >= chunk_size:
+        raise ValueError("chunk_overlap must be smaller than chunk_size")
     chunks = []
     start = 0
-    while start < len(text):
-        end = start + chunk_size
-        chunks.append(text[start:end])
-        start = end - chunk_overlap
+    text_length = len(text)
+    while start < text_length:
+        end = min(start + chunk_size, text_length)
+        chunk = text[start:end].strip()
+        if chunk:  # Avoid empty chunks
+            chunks.append(chunk)
+        if end == text_length:
+            break
+        start += chunk_size - chunk_overlap
     return chunks
 
 # Load documents from the specified directory
@@ -111,7 +133,18 @@ def query_collection(
     # 3. Return the text of the most relevant documents
     return results['documents'][0]
 
-chat = client.chats.create(
+# --- NEW: Function for ColBERT Re-ranking ---
+def rerank_with_colbert(reranker_model: RAGPretrainedModel, query: str, documents: list[str], k: int = 3) -> List[str]:
+    """Re-ranks documents using a ColBERT model and returns the top k results."""
+    if not documents:
+        return []
+    print(f"--> Re-ranking {len(documents)} documents with ColBERT for precision...")
+    reranked_results = reranker_model.rerank(query=query, documents=documents)
+    # Return the content of the top k ranked documents
+    return [doc['content'] for doc in reranked_results[:k]] if reranked_results else []
+
+# Chat engine
+chat = client.aio.chats.create(
     model="gemini-2.5-flash", 
     history=[], 
     config=types.GenerateContentConfig(
@@ -120,9 +153,9 @@ chat = client.chats.create(
 )
 
 
-def answer_with_rag(
+async def answer_with_rag(
     chat_session, 
-    db_collection: chromadb.Collection, 
+    db_collection: chromadb.Collection,
     user_query: str
 ) -> str:
     """
@@ -136,15 +169,29 @@ def answer_with_rag(
     Returns:
         str: The final, context-aware answer from the LLM.
     """
+    start_total = time.time()
+
     # 1. RETRIEVE relevant documents from the database
+    start_retrieve = time.time()
     retrieved_chunks = query_collection(
         db=db_collection,
         query=user_query,
-        n_results=5  # Retrieve 5 chunks for good context
+        n_results=20 # Retrieve 20 chunks for good context
     )
-    
+
+    # RERANK
+
+    reranked_chunks = rerank_with_colbert(
+        reranker_model=RAGPretrainedModel.from_pretrained("colbert-ir/colbertv2.0"),
+        query=user_query,
+        documents=retrieved_chunks,
+        k=5 # Explicitly ask for the top 5
+    )
+    print(f"⏱ Retrieval took {time.time() - start_retrieve:.2f} seconds.")
+
     # 2. AUGMENT: Build the prompt for the LLM
-    if not retrieved_chunks:
+    start_prompt = time.time()
+    if not reranked_chunks:
         # If no relevant documents are found, let the LLM know.
         # This respects your system instruction to admit when it doesn't know.
         print("⚠️ No relevant documents found in the database.")
@@ -158,9 +205,9 @@ def answer_with_rag(
         """
     else:
         # If documents are found, create a context string
-        context_string = "\n---\n".join(retrieved_chunks)
+        context_string = "\n---\n".join(reranked_chunks)
         
-        print(f"✅ Found {len(retrieved_chunks)} relevant chunks. Building prompt...")
+        print(f"✅ Found {len(reranked_chunks)} relevant chunks. Building prompt...")
         
         # This is the RAG prompt template
         prompt = f"""
@@ -175,30 +222,37 @@ def answer_with_rag(
         QUESTION:
         "{user_query}"
         """
-
+    print(f"⏱ Prompt building took {time.time() - start_prompt:.2f} seconds.")
+    
     # 3. GENERATE the answer
     # Send the combined prompt to the chat session
     # The `send_message` method handles history automatically
-    response = chat_session.send_message(prompt)
-    
+    start_generate = time.time()
+    response = await chat_session.send_message(prompt)
+    print(f"⏱ Generation took {time.time() - start_generate:.2f} seconds.")
+
     return response.text
 
-query1 = "What is investment? How do I start investing?"
-query2 = "So as a Nigerian students earning arounf 50k a week, how do I start and still have enough to live on?"
-query3 = "What of as a civil worker earning the nigerian minimum wage?"
+async def main():
+    query1 = "What is investment? How do I start investing?"
+    query2 = "So as a Nigerian students earning arounf 50k a week, how do I start and still have enough to live on?"
+    query3 = "What of as a civil worker earning the nigerian minimum wage?"
+    
+    response1 = await answer_with_rag(chat_session=chat, db_collection=vector_db, user_query=query1)
+    print(response1)
 
-response1 = answer_with_rag(chat_session=chat, db_collection=vector_db, user_query=query1)
-print(response1)
+    response2 = await answer_with_rag(chat_session=chat, db_collection=vector_db, user_query=query2)
+    print(response2)
 
-response2 = answer_with_rag(chat_session=chat, db_collection=vector_db, user_query=query2)
-print(response2)
+    response3 = await answer_with_rag(chat_session=chat, db_collection=vector_db, user_query=query3)
+    print(response3)
 
-response3 = answer_with_rag(chat_session=chat, db_collection=vector_db, user_query=query3)
-print(response3)
+    # for message in chat.get_history():
+    #     print(f'role - {message.role}', end=": ")
+    #     print(message.parts[0].text)
 
-for message in chat.get_history():
-    print(f'role - {message.role}',end=": ")
-    print(message.parts[0].text)
+if __name__ == "__main__":
+    asyncio.run(main())
 
 
 
