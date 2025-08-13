@@ -1,0 +1,7 @@
+pytesseract 
+Pillow
+PyMuPDF
+python-docx
+python-dotenv
+google-genai
+chromadb
