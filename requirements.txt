@@ -5,7 +5,8 @@ python-docx
 python-dotenv
 google-genai
 chromadb
-ragatouille==0.0.7.post10
 fastapi
 pydantic
 uvicorn
+ragatouille==0.0.5
+git+https://github.com/huggingface/voyager.git
