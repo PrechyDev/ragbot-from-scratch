@@ -9,6 +9,6 @@ fastapi
 pydantic
 uvicorn
 # ragatouille==0.0.5
-torch
-transformers
-sentence-transformers
+# torch
+# transformers
+# sentence-transformers

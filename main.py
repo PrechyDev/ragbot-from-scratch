@@ -20,7 +20,7 @@ from google.genai import types
 #from ragatouille import RAGPretrainedModel
 # from ragatouille import RAGPretrainedModel
 # from sentence_transformers import SentenceTransformer, util
-from sentence_transformers import CrossEncoder, util
+# from sentence_transformers import CrossEncoder, util
 
 
 # Your preloaded Chroma collection
@@ -40,7 +40,7 @@ CHAT_MODEL = "gemini-2.5-flash"
 
 INITIAL_K = 50
 RERANK_TOP_K = 10
-ENABLE_RERANK = True
+ENABLE_RERANK = False
 STRICT_GROUNDING = True
 RETURN_CITATIONS = True
 
