@@ -8,5 +8,7 @@ chromadb
 fastapi
 pydantic
 uvicorn
-ragatouille==0.0.5
-git+https://github.com/huggingface/voyager.git
+# ragatouille==0.0.5
+torch
+transformers
+sentence-transformers

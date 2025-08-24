@@ -17,7 +17,11 @@ from google import genai
 from google.genai import types
 
 # Re-ranker
-from ragatouille import RAGPretrainedModel
+#from ragatouille import RAGPretrainedModel
+# from ragatouille import RAGPretrainedModel
+# from sentence_transformers import SentenceTransformer, util
+from sentence_transformers import CrossEncoder, util
+
 
 # Your preloaded Chroma collection
 from ingestion_pipeline import vector_db as CHROMA_COLLECTION  # chromadb.Collection
@@ -46,10 +50,10 @@ RETURN_CITATIONS = True
 client = genai.Client(api_key=GEMINI_API_KEY)
 
 # Reranker
-RERANKER: Optional[RAGPretrainedModel] = None
+RERANKER = None
 if ENABLE_RERANK:
     try:
-        RERANKER = RAGPretrainedModel.from_pretrained("colbert-ir/colbertv2.0")
+        RERANKER = CrossEncoder("cross-encoder/ms-marco-MiniLM-L-6-v2") 
     except Exception as e:
         print(f"[warn] ColBERT load failed: {e}")
         RERANKER = None
@@ -145,26 +149,62 @@ def query_collection(
     return out
 
 
-def rerank_with_colbert(
+# def rerank_with_colbert(
+#     query: str, items: List[Dict[str, Any]], k: int = RERANK_TOP_K
+# ) -> List[Dict[str, Any]]:
+#     if not ENABLE_RERANK or RERANKER is None or not items:
+#         return items[:k]
+#     try:
+#         texts = [it["text"] for it in items]
+#         results = RERANKER.rerank(query=query, documents=texts)
+#         ranked_texts = [r.get("content") or r.get("text") or "" for r in results]
+#         ranked_items, seen = [], set()
+#         for t in ranked_texts:
+#             for it in items:
+#                 if it["text"] == t and id(it) not in seen:
+#                     ranked_items.append(it)
+#                     seen.add(id(it))
+#                     break
+#         return ranked_items[:k] if ranked_items else items[:k]
+#     except Exception as e:
+#         print(f"[rerank] error: {e}")
+#         return items[:k]
+
+
+def rerank_with_transformer(
     query: str, items: List[Dict[str, Any]], k: int = RERANK_TOP_K
 ) -> List[Dict[str, Any]]:
     if not ENABLE_RERANK or RERANKER is None or not items:
         return items[:k]
     try:
         texts = [it["text"] for it in items]
-        results = RERANKER.rerank(query=query, documents=texts)
-        ranked_texts = [r.get("content") or r.get("text") or "" for r in results]
-        ranked_items, seen = [], set()
-        for t in ranked_texts:
-            for it in items:
-                if it["text"] == t and id(it) not in seen:
-                    ranked_items.append(it)
-                    seen.add(id(it))
-                    break
-        return ranked_items[:k] if ranked_items else items[:k]
+        # For cross-encoder reranking
+        from transformers import AutoTokenizer, AutoModelForSequenceClassification
+        if "cross-encoder" in RERANKER.name_or_path:
+            tokenizer = AutoTokenizer.from_pretrained(RERANKER.name_or_path)
+            model = AutoModelForSequenceClassification.from_pretrained(RERANKER.name_or_path)
+            inputs = tokenizer(
+                [query] * len(texts),
+                texts,
+                padding=True,
+                truncation=True,
+                return_tensors="pt"
+            )
+            with torch.no_grad():
+                scores = model(**inputs).logits.squeeze(-1)
+            ranked_pairs = sorted(zip(items, scores.tolist()), key=lambda x: x[1], reverse=True)
+            return [it for it, _ in ranked_pairs[:k]]
+        else:
+            # For bi-encoder reranking
+            q_emb = RERANKER.encode(query, convert_to_tensor=True)
+            d_embs = RERANKER.encode(texts, convert_to_tensor=True)
+            scores = util.pytorch_cos_sim(q_emb, d_embs)[0]
+            ranked_pairs = sorted(zip(items, scores.tolist()), key=lambda x: x[1], reverse=True)
+            return [it for it, _ in ranked_pairs[:k]]
     except Exception as e:
         print(f"[rerank] error: {e}")
         return items[:k]
+
 
 
 # ---------------------------
@@ -235,7 +275,9 @@ async def answer_with_rag(
 ) -> str:
     start = time.time()
     retrieved = query_collection(db_collection, user_query, n_results=INITIAL_K)
-    reranked = rerank_with_colbert(user_query, retrieved, k=RERANK_TOP_K)
+    # reranked = rerank_with_colbert(user_query, retrieved, k=RERANK_TOP_K)
+    reranked = rerank_with_transformer(user_query, retrieved, k=RERANK_TOP_K)
+
 
     prompt, used = build_grounded_prompt(user_query, profile, reranked)
     resp = await chat_session.send_message(prompt)
@@ -307,7 +349,8 @@ async def reflect_on_goal(chat_session, db_collection, goal: str, profile: Dict[
     """
     # Query knowledge base with their goal
     retrieved = query_collection(db_collection, goal, n_results=INITIAL_K)
-    reranked = rerank_with_colbert(goal, retrieved, k=RERANK_TOP_K)
+    # reranked = rerank_with_colbert(goal, retrieved, k=RERANK_TOP_K)
+    reranked = rerank_with_transformer(goal, retrieved, k=RERANK_TOP_K)
 
     prompt, used = build_grounded_prompt(
         f"My primary financial goal is: {goal}. Suggest practical first steps.", 
