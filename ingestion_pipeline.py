@@ -9,12 +9,14 @@ gemini_ef = GeminiEmbeddingFunction()
 # Intitalize chromadb with persistent storage
 chroma_client = chromadb.PersistentClient(path="chroma_persistent_storage")
 collection_name = "finance_collection"
+
 vector_db = chroma_client.get_or_create_collection(
-    name=collection_name, embedding_function=gemini_ef
+    name=collection_name, 
+    embedding_function=gemini_ef
 )
 
 # Text splitting function
-def split_text(text, chunk_size=1000, chunk_overlap=20):
+def split_text(text, chunk_size=500, chunk_overlap=20):
     """
     Splits a given text into overlapping chunks of specified size.
 
@@ -44,24 +46,38 @@ def split_text(text, chunk_size=1000, chunk_overlap=20):
         start += chunk_size - chunk_overlap
     return chunks
 
-# Load documents from the specified directory
+def chunk_documents(documents):
+    """
+    Loads documents from the specified directory, splits them into chunks,
+    and creates embeddings for each chunk to store in the vector database.
+    """
+    # Split documents into chunks
+    chunked_documents = []
+    print("==== Splitting docs into chunks ====")
+    for doc in documents:
+        chunks = split_text(doc['text'])
+        for i, chunk in enumerate(chunks):
+            chunked_documents.append({
+                "id": f"{doc['id']}_chunk_{i}",
+                "text": chunk
+            })
+    return chunked_documents
 
-directory_path = "knowledge_base/"
-documents = load_documents_from_directory(directory_path)
+def main():
+    # load
+    directory_path = "knowledge_base/"
+    documents = load_documents_from_directory(directory_path)
+    print(f"\nLoaded {len(documents)} documents from '{directory_path}'.")
 
-print(f"\nLoaded {len(documents)} documents from '{directory_path}'.")
+    # Chunk the documents
+    chunked_documents = chunk_documents(documents)
+    print(f"Created {len(chunked_documents)} chunks from {len(documents)} documents.")
 
-# Split documents into chunks
-chunked_documents = []
-print("==== Splitting docs into chunks ====")
-for doc in documents:
-    print(f"Processing document: {doc['id']}")
-    chunks = split_text(doc["text"])
-    for i, chunk in enumerate(chunks):
-        chunked_documents.append({"id": f"{doc['id']}_chunk{i+1}", "text": chunk})
+    # Embed into vector db
+    create_and_store_embeddings(chunked_documents, vector_db)
 
-print(f"Created {len(chunked_documents)} chunks from documents.")
+if __name__ == "__main__":
+    main()
 
-# Create and store embeddings in the vector database
-create_and_store_embeddings(chunked_documents, vector_db)
+
 

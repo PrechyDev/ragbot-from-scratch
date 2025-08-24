@@ -20,7 +20,7 @@ gemini_key = os.getenv("GEMINI_API_KEY")
 client = genai.Client(api_key=gemini_key)
 
 # save vector_db for use
-# vector_db = vector_db
+vector_db = vector_db
 
 # Retrieval
 def get_query_embedding(query_text: str) -> List[float]:
@@ -114,7 +114,7 @@ async def answer_with_rag(
     retrieved_chunks = query_collection(
         db=db_collection,
         query=user_query,
-        n_results=20 # Retrieve 20 chunks for good context
+        n_results=50 # Retrieve 50 chunks for good context
     )
 
     # RERANK
@@ -123,7 +123,7 @@ async def answer_with_rag(
         reranker_model=RAGPretrainedModel.from_pretrained("colbert-ir/colbertv2.0"),
         query=user_query,
         documents=retrieved_chunks,
-        k=5 # Explicitly ask for the top 5
+        k=10 # Explicitly ask for the top 10
     )
     print(f"⏱ Retrieval took {time.time() - start_retrieve:.2f} seconds.")
 
@@ -157,6 +157,7 @@ async def answer_with_rag(
         - Do NOT explicitly mention "the context provided" or "the documents." Speak as if this information is your own expertise.
         - Maintain a polite, encouraging, and authoritative Nigerian tone.
         - If the context does not contain the answer, answer based on what your general knowledge and the data you were trained with.
+        - If you are unsure about an answer, it's okay to say "I don't know" and refer to materials or resources the user can check out.
 
         CONTEXT:
         ---
@@ -178,8 +179,8 @@ async def answer_with_rag(
     return response.text
 
 async def main():
-    query1 = "What is the conscious spending plan?"
-    query2 = "So as a Nigerian students earning arounf 50k a week, how do I start and still live a rich life?"
+    query1 = "What is the conscious spending plan according to Ramit Sethi? What are the percentages involved"
+    query2 = "So as a Nigerian student earning around 50k a week, how do I start and still live a rich life?"
     query3 = "Can you help me create a sample plan that would work?"
     
     response1 = await answer_with_rag(chat_session=chat, db_collection=vector_db, user_query=query1)
