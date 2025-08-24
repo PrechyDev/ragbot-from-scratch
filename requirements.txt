@@ -5,7 +5,7 @@ python-docx
 python-dotenv
 google-genai
 chromadb
-ragatouille<0.0.10
+ragatouille==0.0.7.post10
 fastapi
 pydantic
 uvicorn
